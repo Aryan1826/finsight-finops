@@ -1,0 +1,10 @@
+required_tags:
+  - Owner
+  - Environment
+  - Cost-Center
+allowed_values:
+  Environment:
+    - prod
+    - staging
+policy_name: FinSight-Default-Tagging-Policy
+version: "1.0"

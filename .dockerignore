@@ -1,0 +1,25 @@
+# FinSight Docker Build Ignore File
+.venv
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.git
+.gitignore
+.agents/
+.claude/
+.gemini/
+.env
+.env.*
+.streamlit/secrets.toml
+.aws/
+~/.aws/
+*.log
+*.swp
+*.bak
+.DS_Store
