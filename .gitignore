@@ -1,3 +1,12 @@
+# Terraform generated files
+**/.terraform/
+
+# Terraform state and plans
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+
 # Virtual Environments
 .venv/
 venv/
@@ -26,3 +35,6 @@ credentials
 # IDE / Agent State
 .claude/
 .agents/
+
+gittoken.txt
+.terraform/
