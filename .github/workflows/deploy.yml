@@ -1,0 +1,39 @@
+name: finsight finops deployment
+on: 
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+env:
+  REGION: sa-east-1
+  ECR_REPOSITORY: finsight-Finops
+  TF_WORKING_DIR: terraform/root
+jobs:
+  build-and-push:
+    name: build and push docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v4
+      - name: configure aws credentils using oidc
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::575458732659:role/finsight-finops-github-actions-role
+          region: ${{var.REGION}}
+      - name: login to aws ecr
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: build and push docker image
+        env:
+          REGISTRY: ${{steps.login-ectr.outputs.registry}}
+          IMAGE_TAG: ${{github.sha}}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: save image info
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "image pushed"
