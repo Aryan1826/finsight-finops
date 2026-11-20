@@ -44,7 +44,7 @@ module "ecs" {
   task_role_arn = module.iam.task_role_arn
   cpu = 512
   memory = 1024
-  desired_count = 0
+  desired_count = 1
   alb_security_group_id = module.alb.alb_security_group_id
   target_group_arn = module.alb.target_group_arn
 }
