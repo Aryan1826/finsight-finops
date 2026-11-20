@@ -1,14 +1,14 @@
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 locals {
-  oidc_url = "token.actions.githubusercontent.com"
-  github_subject = "repo:${var.github_owner}/${var.github_repository}:ref:refs/heads/${var.github_branch}"
-  ecr_arn = var.ecr_repository_arn
+  oidc_url        = "token.actions.githubusercontent.com"
+  github_subject  = "repo:${var.github_owner}/${var.github_repository}:ref:refs/heads/${var.github_branch}"
+  ecr_arn         = var.ecr_repository_arn
   ecs_cluster_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.ecs_cluster_name}"
   ecs_service_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.ecs_cluster_name}/${var.ecs_service_name}"
 }
 resource "aws_iam_openid_connect_provider" "github" {
-  url = "https://${local.oidc_url}"
+  url            = "https://${local.oidc_url}"
   client_id_list = ["sts.amazonaws.com"]
 }
 resource "aws_iam_role" "github_actions" {
@@ -40,6 +40,51 @@ resource "aws_iam_policy" "github_deployment" {
     Version = "2012-10-17"
 
     Statement = [
+      {
+        Sid    = "TerraformStateAccess"
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject"
+        ]
+
+        Resource = "arn:aws:s3:::finsight-finops-tfstate-locking-file/finsight/production/terraform.tfstate"
+      },
+      {
+        Sid    = "TerraformLockFileAccess"
+        Effect = "Allow"
+
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+
+        Resource = "arn:aws:s3:::finsight-finops-tfstate-locking-file/finsight/production/terraform.tfstate.tflock"
+      },
+      {
+        Sid    = "TerraformStateBucketList"
+        Effect = "Allow"
+
+        Action = [
+          "s3:ListBucket"
+        ]
+
+        Resource = "arn:aws:s3:::finsight-finops-tfstate-locking-file"
+
+        Condition = {
+          StringLike = {
+            "s3:prefix" = [
+              "finsight/production/terraform.tfstate",
+              "finsight/production/terraform.tfstate.tflock"
+            ]
+          }
+        }
+      },
+
+
+
       {
         Sid    = "ECRAuthentication"
         Effect = "Allow"
@@ -102,7 +147,7 @@ resource "aws_iam_policy" "github_deployment" {
   })
 }
 resource "aws_iam_role_policy_attachment" "github_deployment" {
-  role = aws_iam_role.github_actions.name
+  role       = aws_iam_role.github_actions.name
   policy_arn = aws_iam_policy.github_deployment.arn
 }
 

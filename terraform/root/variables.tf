@@ -2,10 +2,10 @@ variable "region" {
   type = string
 }
 variable "vpc_cidr" {
-  type = string
+  type    = string
   default = "10.20.0.0/16"
 }
 variable "image_tag" {
-  type = string
+  type    = string
   default = "v1"
 }
