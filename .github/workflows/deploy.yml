@@ -8,7 +8,7 @@ permissions:
   id-token: write
   contents: read
 env:
-  REGION: sa-east-1
+  AWS_REGION: sa-east-1
   ECR_REPOSITORY: finsight-Finops
   TF_WORKING_DIR: terraform/root
 jobs:
@@ -22,7 +22,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::575458732659:role/finsight-finops-github-actions-role
-          region: ${{var.REGION}}
+          aws-region: ${{var.AWS_REGION}}
       - name: login to aws ecr
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
