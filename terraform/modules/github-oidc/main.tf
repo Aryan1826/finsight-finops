@@ -2,7 +2,7 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 locals {
   oidc_url        = "token.actions.githubusercontent.com"
-  github_subject  = "repo:${var.github_owner}/${var.github_repository}:ref:refs/heads/${var.github_branch}"
+  github_subject  = "repo:${var.github_owner}/${var.github_repository}:ref:refs/heads/*"
   ecr_arn         = var.ecr_repository_arn
   ecs_cluster_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.ecs_cluster_name}"
   ecs_service_arn = "arn:${data.aws_partition.current.partition}:ecs:${var.region}:${data.aws_caller_identity.current.account_id}:service/${var.ecs_cluster_name}/${var.ecs_service_name}"
