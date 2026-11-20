@@ -20,6 +20,18 @@ resource "aws_security_group" "ecs" {
     protocol = "tcp"
     security_groups = [var.alb_security_group_id]
   }
+  ingress {
+    from_port = 443
+    to_port = 443
+    protocol = "tcp"
+    security_groups = [var.alb_security_group_id]
+  }
+  ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    security_groups = [var.alb_security_group_id]
+  }
 }
 resource "aws_ecs_task_definition" "main" {
   family = "${var.project_name}-task"

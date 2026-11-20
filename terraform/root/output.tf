@@ -31,3 +31,6 @@ output "ecs_log_group_name" {
 output "finsight_alb_url" {
   value = "http://${module.alb.alb_dns_name}"
 }
+output "github_actions_role_arn" {
+  value = module.github_oidc.github_actions_role_arn
+}
