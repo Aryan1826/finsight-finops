@@ -9,7 +9,7 @@ permissions:
   contents: read
 env:
   AWS_REGION: sa-east-1
-  ECR_REPOSITORY: finsight-Finops
+  ECR_REPOSITORY: finsight-finops
   TF_WORKING_DIR: terraform/root
 jobs:
   build-and-push:
