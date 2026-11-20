@@ -17,15 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: configure aws credentils using oidc
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: arn:aws:iam::575458732659:role/finsight-finops-github-actions-role
           aws-region: ${{env.AWS_REGION}}
       - name: login to aws ecr
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@v2.2.0
       - name: build and push docker image
         env:
           REGISTRY: ${{steps.login-ectr.outputs.registry}}
