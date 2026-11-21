@@ -84,29 +84,29 @@ streamlit run app.py
 
 The application will start on `http://localhost:8501`.
 
-## Connect an AWS Account (1-Click CloudFormation)
+## Connecting an AWS Account
 
-FinSight provides a **1-Click AWS CloudFormation Onboarding** workflow to connect any customer AWS account securely:
+FinSight supports three authentication methods for live AWS account telemetry:
 
-1. **Open FinSight:** Under **Data Source**, select **Live AWS Account**, then choose **Cross-Account IAM Role**.
-2. **Review External ID:** FinSight automatically generates a cryptographically secure random External ID (e.g., `finsight-ext-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`).
-3. **Launch CloudFormation:** Click **🚀 Launch CloudFormation Setup**. This opens the AWS CloudFormation Quick-Create console with pre-filled parameters.
-4. **Create Stack:** Acknowledge IAM resource creation and click **Create stack**.
-5. **Copy Role ARN:** Once the stack is `CREATE_COMPLETE`, copy the `RoleArn` from the CloudFormation **Outputs** tab:
-   ```text
-   arn:aws:iam::<CUSTOMER_ACCOUNT_ID>:role/FinSightReadOnlyRole
-   ```
-6. **Connect & Fetch Data:** Paste the copied Role ARN into FinSight and click **Connect & Fetch Data**. FinSight assumes the role via `sts:AssumeRole` with the matching External ID and loads your read-only FinOps intelligence dashboard.
+### 1. AWS Access Key Credentials (Direct Entry)
+Allows users to connect their AWS accounts directly by entering credentials into the web UI without configuring local AWS CLI profiles:
+- **AWS Access Key ID**: 20-character identifier (e.g. `AKIA...` or `ASIA...`)
+- **AWS Secret Access Key**: Masked password field
+- **AWS Session Token (Optional)**: Masked field for temporary credentials generated via STS or AWS IAM Identity Center
+- **AWS Region**: Selectable region (defaults to `ap-south-1`)
 
-*(Manual IAM setup is also supported by selecting "Already have a configured FinSight role?" in the sidebar).*
+### 2. Cross-Account IAM Role (1-Click CloudFormation)
+Connects securely via STS AssumeRole using an automated CloudFormation onboarding template with a cryptographically secure External ID.
 
-For the full security architecture and manual fallback instructions, see:
-- 📖 [Customer AWS Setup Guide](docs/customer-aws-setup.md)
-- 📋 [Customer AWS Onboarding Checklist](docs/customer-aws-checklist.md)
+### 3. Local AWS Profile
+Connects via local AWS CLI profile configured in `~/.aws/credentials` or the default AWS SDK credential chain.
 
-## Security & Safety
+## Security Architecture & Non-Persistence
 
-- **Strictly Read-Only:** FinSight only calls `Describe*`, `Get*`, and `List*` AWS APIs. It contains zero mutation or destructive operations.
-- **Zero Permanent Key Storage:** No long-lived `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` are accepted or stored. All cross-account access uses short-lived in-memory STS session tokens.
+- **Strictly Read-Only:** FinSight only executes read-only AWS APIs (`Describe*`, `Get*`, `List*`). It contains zero destructive operations (no instance termination, volume deletion, or resource modification).
+- **Zero Credential Persistence:** FinSight never saves AWS credentials to disk, files, databases, `.env`, JSON, YAML, or any persistent storage. Credentials and sessions are never cached across users or persisted with Streamlit cache decorators.
+- **Immediate Disconnect:** Clicking **Disconnect AWS Account** completely purges connection state, caller identity, and telemetry from application memory.
+- **Hosted Application Security Notice:** When FinSight is hosted in a shared environment (such as AWS ECS) and accessed over the web, credentials entered into the browser are transmitted to the application server and processed in server memory for the duration of the session. Streamlit processes session state on the server, and memory is not securely zeroized.
+- **Least-Privilege Recommendation:** For hosted deployments, users are strongly advised to provide **temporary credentials** (with a session token) attached to a read-only policy (such as `SecurityAudit` or `ReadOnlyAccess`) rather than long-lived root or administrator access keys.
 - **Confused Deputy Protection:** Mandatory unique `ExternalId` condition enforced in all cross-account trust policies.
-- **Dry-Run Remediation:** All optimization actions are presented as non-destructive dry-run simulation previews.
+- **Dry-Run Remediation:** All optimization actions are presented as non-destructive dry-run simulation previews (`--dry-run`).

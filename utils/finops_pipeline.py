@@ -83,10 +83,17 @@ def run_live_finops_analysis(
     policy_path: str | Path = "config/tagging_policy.yaml",
     include_cloudwatch: bool = True,
     include_cost_explorer: bool = True,
+    aws_access_key_id: Optional[str] = None,
+    aws_secret_access_key: Optional[str] = None,
+    aws_session_token: Optional[str] = None,
+    session: Optional[Any] = None,
 ) -> FinOpsAnalysisResult:
     """Execute the end-to-end Live AWS FinOps analysis pipeline.
 
-    Supports both Local AWS Profile/Default Credentials and Cross-Account IAM Role (AssumeRole).
+    Supports:
+    - AWS Access Key Credentials (manual input)
+    - Cross-Account IAM Role (AssumeRole)
+    - Local AWS Profile / Default Credentials
 
     Workflow:
     1. Authenticate & validate AWS identity via STS.
@@ -101,14 +108,20 @@ def run_live_finops_analysis(
     """
     warnings: List[str] = []
 
-    # 1. Establish AWS session (profile or STS AssumeRole) and validate caller identity
-    session = create_boto3_session(
-        profile_name=profile_name,
-        region_name=region,
-        role_arn=role_arn,
-        external_id=external_id,
-        role_session_name=role_session_name,
-    )
+    # 1. Establish AWS session (if not already established) and validate caller identity
+    if session is None:
+        sess_kwargs: Dict[str, Any] = {
+            "profile_name": profile_name,
+            "region_name": region,
+            "role_arn": role_arn,
+            "external_id": external_id,
+            "role_session_name": role_session_name,
+        }
+        if aws_access_key_id is not None or aws_secret_access_key is not None or aws_session_token is not None:
+            sess_kwargs["aws_access_key_id"] = aws_access_key_id
+            sess_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            sess_kwargs["aws_session_token"] = aws_session_token
+        session = create_boto3_session(**sess_kwargs)
     caller = validate_credentials(session=session, region_name=region, expected_role_arn=role_arn)
     account_id = caller.get("account_id", "")
     arn = caller.get("arn", "")

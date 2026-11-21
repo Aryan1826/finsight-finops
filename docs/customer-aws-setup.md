@@ -8,7 +8,12 @@ This guide explains how to connect your AWS account to FinSight using **1-Click 
 
 FinSight is built with an enterprise least-privilege, read-only security model:
 
-- **Zero Permanent Credentials:** You never provide AWS Access Key IDs or Secret Access Keys. FinSight accesses your account using temporary, in-memory STS session credentials via `sts:AssumeRole`.
+- **Flexible Authentication Modes:**
+  1. **AWS Access Key Credentials:** Direct manual input in the UI without needing local AWS CLI profile setup.
+  2. **Cross-Account IAM Role:** 1-Click AWS CloudFormation onboarding via `sts:AssumeRole`.
+  3. **Local AWS Profile:** Using local CLI credentials configured in `~/.aws/credentials`.
+- **Zero Credential Persistence:** FinSight never saves AWS credentials to disk, files, databases, `.env`, or persistent caches. All credentials are kept only in application memory while connected and cleared upon disconnection.
+- **Hosted Deployment Security Warning:** When FinSight is deployed in a hosted environment (e.g. AWS ECS), entering AWS keys transmits them to the application server process memory. Users are advised to supply temporary credentials with session tokens and attach least-privilege read-only policies. Streamlit processes session state on the server, and memory is not securely zeroized.
 - **Confused Deputy Protection:** Every cross-account role assumption requires a cryptographically secure, unique `ExternalId` generated specifically for your connection session.
 - **Strictly Read-Only:** The IAM permissions granted to FinSight are strictly limited to `Describe*`, `Get*`, and `List*` APIs for EC2, EBS, CloudWatch, and Cost Explorer.
 - **Zero Resource Mutation:** FinSight contains zero logic or permissions to stop, terminate, reboot, delete, release, or modify your instances, volumes, Elastic IPs, tags, or VPCs.

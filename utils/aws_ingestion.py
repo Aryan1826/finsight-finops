@@ -2,19 +2,27 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any, Optional
 import pandas as pd
 
 
-def fetch_cost_explorer_daily_costs(start: date, end: date, region: str = "us-east-1") -> pd.DataFrame:
+def fetch_cost_explorer_daily_costs(
+    start: date,
+    end: date,
+    region: str = "us-east-1",
+    session: Optional[Any] = None,
+) -> pd.DataFrame:
     """Fetch daily unblended EC2 cost from AWS Cost Explorer.
 
-    Requires AWS credentials configured for boto3 and Cost Explorer permissions.
+    Requires AWS credentials configured for boto3 or an active authenticated session.
     This helper intentionally returns cost-level data; resource-level utilization
     still requires CloudWatch and resource metadata APIs.
     """
-    import boto3
-
-    client = boto3.client("ce", region_name=region)
+    if session:
+        client = session.client("ce", region_name=region)
+    else:
+        import boto3
+        client = boto3.client("ce", region_name=region)
     response = client.get_cost_and_usage(
         TimePeriod={"Start": start.isoformat(), "End": end.isoformat()},
         Granularity="DAILY",
@@ -31,11 +39,19 @@ def fetch_cost_explorer_daily_costs(start: date, end: date, region: str = "us-ea
     return pd.DataFrame(rows)
 
 
-def fetch_ec2_cpu_metrics(instance_ids: list[str], start: date, end: date, region: str = "us-east-1") -> pd.DataFrame:
+def fetch_ec2_cpu_metrics(
+    instance_ids: list[str],
+    start: date,
+    end: date,
+    region: str = "us-east-1",
+    session: Optional[Any] = None,
+) -> pd.DataFrame:
     """Fetch daily average CPUUtilization from CloudWatch for selected instances."""
-    import boto3
-
-    client = boto3.client("cloudwatch", region_name=region)
+    if session:
+        client = session.client("cloudwatch", region_name=region)
+    else:
+        import boto3
+        client = boto3.client("cloudwatch", region_name=region)
     rows = []
     for instance_id in instance_ids:
         response = client.get_metric_statistics(

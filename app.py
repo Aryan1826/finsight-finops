@@ -23,9 +23,13 @@ sys.path.insert(0, str(ROOT))
 
 from utils.aws_client import (
     AWSCredentialError,
+    AWSPermissionError,
     AWSError,
+    authenticate_with_access_keys,
     build_cloudformation_quick_create_url,
+    create_boto3_session,
     generate_external_id,
+    validate_credentials,
 )
 from utils.finops_pipeline import run_live_finops_analysis, FinOpsAnalysisResult
 from utils.idle_detector import detect_idle_resources
@@ -123,15 +127,19 @@ if data_source == "Live AWS Account":
 
     auth_mode = st.sidebar.radio(
         "Connection Method",
-        ["Local AWS Profile", "Cross-Account IAM Role"],
+        ["AWS Access Key Credentials", "Cross-Account IAM Role", "Local AWS Profile"],
         index=0,
-        help="Use 'Local AWS Profile' for local development (~/.aws/credentials) or 'Cross-Account IAM Role' for 1-click STS AssumeRole.",
+        help="Use 'AWS Access Key Credentials' for direct keys, 'Cross-Account IAM Role' for 1-click STS AssumeRole, or 'Local AWS Profile' for ~/.aws/credentials.",
     )
 
-    profile_input: str | None = None
-    role_arn_input: str | None = None
-    external_id_input: str | None = None
-    manual_mode: bool = False
+    # Invalidate connection state if user switched auth mode
+    if "current_auth_mode" not in st.session_state:
+        st.session_state["current_auth_mode"] = auth_mode
+    elif st.session_state["current_auth_mode"] != auth_mode:
+        st.session_state["current_auth_mode"] = auth_mode
+        st.session_state.pop("connected_live_result", None)
+        st.session_state.pop("connected_identity", None)
+        st.session_state.pop("is_aws_connected", None)
 
     region_options = [
         "ap-south-1",
@@ -143,9 +151,52 @@ if data_source == "Live AWS Account":
         "eu-central-1",
         "ap-southeast-1",
     ]
-    region_input = st.sidebar.selectbox("AWS Region", region_options, index=0)
 
-    if auth_mode == "Local AWS Profile":
+    profile_input: str | None = None
+    role_arn_input: str | None = None
+    external_id_input: str | None = None
+    manual_mode: bool = False
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_session_token: str = ""
+
+    if auth_mode == "AWS Access Key Credentials":
+        aws_access_key_id = st.sidebar.text_input(
+            "AWS Access Key ID",
+            value="",
+            placeholder="AKIA...",
+            help="Enter your 20-character AWS Access Key ID.",
+        )
+        aws_secret_access_key = st.sidebar.text_input(
+            "AWS Secret Access Key",
+            value="",
+            type="password",
+            placeholder="AWS Secret Access Key",
+            help="Enter your AWS Secret Access Key.",
+        )
+        aws_session_token = st.sidebar.text_input(
+            "AWS Session Token (Optional)",
+            value="",
+            type="password",
+            placeholder="Optional Session Token",
+            help="Required only when connecting with temporary STS session credentials.",
+        )
+        region_input = st.sidebar.selectbox("AWS Region", region_options, index=0)
+
+        with st.sidebar.expander("🔒 Hosted Deployment & Credential Notice", expanded=False):
+            st.markdown(
+                "**Security Notice for Hosted Deployments:**\n"
+                "- **In-Memory Only:** FinSight strictly processes credentials in application server memory. "
+                "Credentials are **never saved to files, disk, databases, or persistent storage**.\n"
+                "- **Memory Notice:** Credentials are processed by the server and may remain in process memory "
+                "during the session; memory is not securely zeroized.\n"
+                "- **Least Privilege:** FinSight is **strictly read-only** and performs zero destructive actions. "
+                "We strongly recommend using **temporary credentials** (with a session token) and attaching "
+                "a read-only policy (e.g. `SecurityAudit` or `ReadOnlyAccess`)."
+            )
+
+    elif auth_mode == "Local AWS Profile":
+        region_input = st.sidebar.selectbox("AWS Region", region_options, index=0)
         profile_input = st.sidebar.text_input(
             "AWS Profile",
             value="finsight",
@@ -153,6 +204,7 @@ if data_source == "Live AWS Account":
         )
     else:
         # Cross-Account IAM Role onboarding workflow
+        region_input = st.sidebar.selectbox("AWS Region", region_options, index=0)
         if "generated_external_id" not in st.session_state:
             st.session_state["generated_external_id"] = generate_external_id()
 
@@ -213,63 +265,201 @@ if data_source == "Live AWS Account":
         help="Historical CloudWatch metric and Cost Explorer observation period.",
     )
 
-    col_btn1, col_btn2 = st.sidebar.columns(2)
-    with col_btn1:
-        fetch_clicked = st.button("Connect & Fetch Data", type="primary", use_container_width=True)
-    with col_btn2:
-        refresh_clicked = st.button("Refresh Data", use_container_width=True)
+    is_connected = st.session_state.get("is_aws_connected", False)
+    connected_identity = st.session_state.get("connected_identity", {})
 
-    if refresh_clicked:
-        st.cache_data.clear()
-        fetch_clicked = True
-
-    # Check if we should fetch or have existing session state
-    state_key = f"live_result_{auth_mode}_{profile_input}_{role_arn_input}_{region_input}_{days_input}"
-    if fetch_clicked or state_key not in st.session_state:
-        # If Cross-Account mode is chosen but Role ARN or External ID is empty, prompt user
-        if auth_mode == "Cross-Account IAM Role" and (not role_arn_input or not external_id_input):
-            if not manual_mode:
-                st.info(
-                    "👈 **Step 1:** Click **Launch CloudFormation Setup** in the sidebar to create your read-only role.\n\n"
-                    "**Step 2:** Copy the **RoleArn** from the CloudFormation Outputs tab, paste it in the sidebar, and click **Connect & Fetch Data**."
-                )
-            else:
-                st.info("👈 Please enter a valid AWS Role ARN and External ID in the sidebar, then click **Connect & Fetch Data**.")
-            st.stop()
-
-        with st.spinner("Connecting to AWS & collecting read-only telemetry..."):
-            try:
-                live_result = cached_live_analysis(
-                    profile_name=profile_input,
-                    role_arn=role_arn_input,
-                    external_id=external_id_input,
-                    region=region_input,
-                    observation_days=days_input,
-                    policy_path=policy_path,
-                )
-                st.session_state[state_key] = live_result
-                st.session_state["active_live_key"] = state_key
-            except AWSCredentialError as e:
-                st.sidebar.error(f"Authentication Failed: {e}")
-                st.error(
-                    f"**AWS Authentication Error:** {e}\n\n"
-                    f"Please verify your AWS Role ARN, External ID, trust policy, or local profile."
-                )
-                st.stop()
-            except AWSError as e:
-                st.sidebar.error(f"AWS Error: {e}")
-                st.error(f"**AWS Service Error:** {e}")
-                st.stop()
-            except Exception as e:
-                st.sidebar.error(f"Unexpected Error: {e}")
-                st.error(f"**Unexpected Error:** {e}")
-                st.stop()
+    if is_connected:
+        st.sidebar.success(f"● Connected: {connected_identity.get('auth_method', auth_mode)}")
+        st.sidebar.markdown(
+            f"**Account ID:** `{connected_identity.get('account_id', 'Unknown')}`  \n"
+            f"**Caller ARN:** `{connected_identity.get('arn', 'Unknown')}`  \n"
+            f"**Region:** `{connected_identity.get('region', region_input)}`"
+        )
+        col_btn1, col_btn2 = st.sidebar.columns(2)
+        with col_btn1:
+            if st.button("Disconnect AWS Account", type="secondary", use_container_width=True):
+                # Disconnect logic: completely clear connection and credential state
+                st.session_state.pop("is_aws_connected", None)
+                st.session_state.pop("connected_live_result", None)
+                st.session_state.pop("connected_identity", None)
+                st.cache_data.clear()
+                st.rerun()
+        with col_btn2:
+            refresh_clicked = st.button("Refresh Telemetry", use_container_width=True)
+            if refresh_clicked:
+                st.session_state.pop("connected_live_result", None)
+                st.cache_data.clear()
+                st.rerun()
     else:
-        live_result = st.session_state.get(state_key)
+        connect_clicked = st.sidebar.button("Connect AWS Account", type="primary", use_container_width=True)
 
-    if live_result is not None:
-        df = live_result.data
-        source_name = f"Live AWS (Account {live_result.account_id} | {live_result.region})"
+        if connect_clicked:
+            if auth_mode == "AWS Access Key Credentials":
+                if not aws_access_key_id.strip() or not aws_secret_access_key.strip():
+                    st.sidebar.error("Both AWS Access Key ID and Secret Access Key must be provided.")
+                    st.error("👈 Please enter both AWS Access Key ID and Secret Access Key in the sidebar.")
+                    st.stop()
+
+                with st.spinner("Validating AWS credentials via STS GetCallerIdentity..."):
+                    try:
+                        session, identity = authenticate_with_access_keys(
+                            aws_access_key_id=aws_access_key_id,
+                            aws_secret_access_key=aws_secret_access_key,
+                            aws_session_token=aws_session_token if aws_session_token.strip() else None,
+                            region_name=region_input,
+                        )
+                    except AWSCredentialError as e:
+                        st.sidebar.error(f"Authentication Failed: {e}")
+                        st.error(f"**AWS Authentication Error:** {e}\n\nPlease check your Access Key ID and Secret Access Key.")
+                        st.stop()
+                    except AWSPermissionError as e:
+                        st.sidebar.error(f"Permission Error: {e}")
+                        st.error(f"**AWS Permission Error:** {e}")
+                        st.stop()
+                    except AWSError as e:
+                        st.sidebar.error(f"AWS Error: {e}")
+                        st.error(f"**AWS Integration Error:** {e}")
+                        st.stop()
+                    except Exception as e:
+                        st.sidebar.error(f"Unexpected Error: {e}")
+                        st.error(f"**Unexpected Error:** {e}")
+                        st.stop()
+
+                with st.spinner("Connected! Ingesting read-only inventory & telemetry..."):
+                    try:
+                        live_result = run_live_finops_analysis(
+                            session=session,
+                            region=region_input,
+                            observation_days=days_input,
+                            policy_path=policy_path,
+                            include_cloudwatch=True,
+                            include_cost_explorer=True,
+                        )
+                        st.session_state["is_aws_connected"] = True
+                        st.session_state["connected_identity"] = identity
+                        st.session_state["connected_live_result"] = live_result
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Collection Error: {e}")
+                        st.error(f"**AWS Telemetry Collection Error:** {e}")
+                        st.stop()
+
+            elif auth_mode == "Cross-Account IAM Role":
+                if not role_arn_input or not external_id_input:
+                    if not manual_mode:
+                        st.info(
+                            "👈 **Step 1:** Click **Launch CloudFormation Setup** in the sidebar to create your read-only role.\n\n"
+                            "**Step 2:** Copy the **RoleArn** from the CloudFormation Outputs tab, paste it in the sidebar, and click **Connect AWS Account**."
+                        )
+                    else:
+                        st.info("👈 Please enter a valid AWS Role ARN and External ID in the sidebar, then click **Connect AWS Account**.")
+                    st.stop()
+
+                with st.spinner("Assuming IAM Role via STS AssumeRole..."):
+                    try:
+                        session = create_boto3_session(
+                            role_arn=role_arn_input,
+                            external_id=external_id_input,
+                            region_name=region_input,
+                        )
+                        caller = validate_credentials(session=session, region_name=region_input, expected_role_arn=role_arn_input)
+                        identity = {
+                            "account_id": caller["account_id"],
+                            "arn": caller["arn"],
+                            "user_id": caller["user_id"],
+                            "region": region_input,
+                            "auth_method": "Cross-Account IAM Role",
+                        }
+                    except AWSCredentialError as e:
+                        st.sidebar.error(f"Authentication Failed: {e}")
+                        st.error(f"**AWS Authentication Error:** {e}\n\nPlease verify your AWS Role ARN and External ID.")
+                        st.stop()
+                    except AWSPermissionError as e:
+                        st.sidebar.error(f"Permission Denied: {e}")
+                        st.error(f"**AWS Permission Denied:** {e}")
+                        st.stop()
+                    except AWSError as e:
+                        st.sidebar.error(f"AWS Error: {e}")
+                        st.error(f"**AWS Service Error:** {e}")
+                        st.stop()
+
+                with st.spinner("Connected! Ingesting read-only inventory & telemetry..."):
+                    try:
+                        live_result = run_live_finops_analysis(
+                            session=session,
+                            region=region_input,
+                            role_arn=role_arn_input,
+                            external_id=external_id_input,
+                            observation_days=days_input,
+                            policy_path=policy_path,
+                            include_cloudwatch=True,
+                            include_cost_explorer=True,
+                        )
+                        st.session_state["is_aws_connected"] = True
+                        st.session_state["connected_identity"] = identity
+                        st.session_state["connected_live_result"] = live_result
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Collection Error: {e}")
+                        st.error(f"**AWS Telemetry Collection Error:** {e}")
+                        st.stop()
+
+            elif auth_mode == "Local AWS Profile":
+                with st.spinner("Connecting via AWS Profile & verifying identity..."):
+                    try:
+                        session = create_boto3_session(
+                            profile_name=profile_input,
+                            region_name=region_input,
+                        )
+                        caller = validate_credentials(session=session, region_name=region_input)
+                        identity = {
+                            "account_id": caller["account_id"],
+                            "arn": caller["arn"],
+                            "user_id": caller["user_id"],
+                            "region": region_input,
+                            "auth_method": f"Local Profile ({profile_input})" if profile_input else "Default AWS Credentials",
+                        }
+                    except AWSCredentialError as e:
+                        st.sidebar.error(f"Authentication Failed: {e}")
+                        st.error(
+                            f"**AWS Authentication Error:** {e}\n\n"
+                            f"If you do not have AWS CLI profiles configured, switch to **AWS Access Key Credentials** "
+                            f"or **Cross-Account IAM Role** above."
+                        )
+                        st.stop()
+                    except AWSError as e:
+                        st.sidebar.error(f"AWS Error: {e}")
+                        st.error(f"**AWS Service Error:** {e}")
+                        st.stop()
+
+                with st.spinner("Connected! Ingesting read-only inventory & telemetry..."):
+                    try:
+                        live_result = run_live_finops_analysis(
+                            session=session,
+                            region=region_input,
+                            profile_name=profile_input,
+                            observation_days=days_input,
+                            policy_path=policy_path,
+                            include_cloudwatch=True,
+                            include_cost_explorer=True,
+                        )
+                        st.session_state["is_aws_connected"] = True
+                        st.session_state["connected_identity"] = identity
+                        st.session_state["connected_live_result"] = live_result
+                        st.rerun()
+                    except Exception as e:
+                        st.sidebar.error(f"Collection Error: {e}")
+                        st.error(f"**AWS Telemetry Collection Error:** {e}")
+                        st.stop()
+
+    if is_connected:
+        live_result = st.session_state.get("connected_live_result")
+        if live_result is not None:
+            df = live_result.data
+            source_name = f"Live AWS (Account {live_result.account_id} | {live_result.region})"
+    else:
+        st.info("👈 **Connect AWS Account:** Select a connection method and enter credentials in the sidebar to begin FinOps analysis.")
+        st.stop()
 
 
 elif data_source == "Synthetic CUR":
@@ -399,8 +589,10 @@ with st.container(border=True):
     col_status1, col_status2, col_status3 = st.columns([1.5, 1, 1])
     with col_status1:
         if is_live_mode and live_result is not None:
+            identity = st.session_state.get("connected_identity", {})
+            auth_method_label = identity.get("auth_method", "Live AWS Account")
             st.markdown(
-                f"**Status:** :green[● Connected to AWS]  \n"
+                f"**Status:** :green[● Connected via {auth_method_label}]  \n"
                 f"**AWS Account:** `{live_result.account_id}` &nbsp;|&nbsp; "
                 f"**Region:** `{live_result.region}`  \n"
                 f"**Identity:** `{live_result.arn}`"

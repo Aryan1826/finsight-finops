@@ -29,8 +29,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        default="finsight",
-        help="AWS named profile to use (default: finsight). Leave empty or pass '' for default credentials.",
+        default=None,
+        help="AWS named profile to use (e.g. finsight). Leave empty for default credentials or access keys.",
+    )
+    parser.add_argument(
+        "--access-key-id",
+        default=None,
+        help="AWS Access Key ID for direct credential authentication",
+    )
+    parser.add_argument(
+        "--secret-access-key",
+        default=None,
+        help="AWS Secret Access Key for direct credential authentication",
+    )
+    parser.add_argument(
+        "--session-token",
+        default=None,
+        help="AWS Session Token for temporary STS credentials",
     )
     parser.add_argument(
         "--role-arn",
@@ -72,7 +87,11 @@ def main() -> None:
     print("=" * 70)
     print(" ☁️  FinSight — Live AWS FinOps Pipeline (Read-Only Inspection)")
     print("=" * 70)
-    if args.role_arn:
+    if args.access_key_id or args.secret_access_key:
+        print(f" Auth Mode : AWS Access Key Credentials")
+        masked_key = f"{args.access_key_id[:4]}...[REDACTED]" if args.access_key_id else "[NOT SET]"
+        print(f" Key ID    : {masked_key}")
+    elif args.role_arn:
         print(f" Auth Mode : Cross-Account IAM Role (AssumeRole)")
         print(f" Role ARN  : {args.role_arn}")
         print(f" Ext ID    : {args.external_id}")
@@ -87,11 +106,14 @@ def main() -> None:
     try:
         print("[1/5] Authenticating and validating AWS caller identity...")
         result = run_live_finops_analysis(
-            profile_name=args.profile if not args.role_arn else None,
+            profile_name=args.profile if not args.role_arn and not args.access_key_id else None,
             region=args.region,
             role_arn=args.role_arn,
             external_id=args.external_id,
             role_session_name=args.role_session_name,
+            aws_access_key_id=args.access_key_id,
+            aws_secret_access_key=args.secret_access_key,
+            aws_session_token=args.session_token,
             observation_days=args.days,
             policy_path=args.policy,
             include_cloudwatch=True,
