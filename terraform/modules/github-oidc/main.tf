@@ -30,9 +30,9 @@ resource "aws_iam_role" "github_actions" {
         "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
       }
  
-      StringLike = {
-        "token.actions.githubusercontent.com:sub" = local.github_subject
-      }
+      "StringLike": {
+  "token.actions.githubusercontent.com:sub": "repo:Aryan1826/finsight-finops:*"
+}
     }
   }]
   })
