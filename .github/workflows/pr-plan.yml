@@ -1,0 +1,54 @@
+name: finsight pr validation
+on: 
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  id-token: write
+env:
+  AWS_REGION: sa-east-1
+  TF_WORKING_DIR: terraform/root
+jobs:
+  validate-and-plan:
+    name: python validation and terraform plan
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps: 
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: check python syntax
+        run: python -m compileall -q .
+      - name: setup terraform
+        uses: hashicorp/setup-terraform@v3
+        with: 
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
+      - name: terraform format check
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform fmt -check -recursive
+      - name: configure aws credentials using pr role
+        uses: aws-actions/configure-aws-credentials@v4
+        with: 
+          role-to-assume: aen:aws:iam::575458732659:role/finsight-finops-github-plan-role
+          aws-region: ${{ env.AWS_REGION }} 
+      - name: verify aws identity
+        run: aws sts get-caller-identity
+      - name: terraform init
+        working-directory: ${{ env.TF_WORKING-DIR }}
+        run: terraform init -input=false
+      - name: terraform validate
+        working-directory: ${{ env.TF_WORKING-DIR }}
+        run: terraform validate
+      - name: terraform plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan \
+            -input=false \
+            -no-color \
+            -var="image_tag=${{ github.event.pull_request.head.sha }}"
