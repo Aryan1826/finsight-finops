@@ -31,7 +31,7 @@ resource "aws_iam_role" "github_actions" {
       }
  
       "StringLike": {
-  "token.actions.githubusercontent.com:sub": "repo:Aryan1826/finsight-finops:*"
+  "token.actions.githubusercontent.com:sub": "repo:Aryan1826@169895028/finsight-finops@1359814557:ref:refs/heads/main"
 }
     }
   }]
