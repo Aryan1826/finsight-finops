@@ -32,6 +32,13 @@ from utils.aws_client import (
     validate_credentials,
 )
 from utils.finops_pipeline import run_live_finops_analysis, FinOpsAnalysisResult
+from utils.aws_region_scanner import (
+    discover_enabled_regions,
+    filter_eligible_regions,
+    REGION_STATUS_OPT_IN_NOT_REQUIRED,
+    REGION_STATUS_OPTED_IN,
+    REGION_STATUS_NOT_OPTED_IN,
+)
 from utils.idle_detector import detect_idle_resources
 from utils.normalizer import normalize_cur_dataframe, normalize_live_dataframe
 from utils.remediation_simulator import generate_remediation_plan, remediation_plan_to_dataframe
@@ -60,6 +67,8 @@ def cached_live_analysis(
     region: str,
     observation_days: int,
     policy_path: str,
+    scan_all_regions: bool = False,
+    selected_regions: tuple[str, ...] | None = None,
 ) -> FinOpsAnalysisResult:
     """Fetch and analyze live AWS resources with caching to prevent unnecessary API calls."""
     clean_profile = profile_name.strip() if profile_name and profile_name.strip() else None
@@ -74,6 +83,8 @@ def cached_live_analysis(
         policy_path=policy_path,
         include_cloudwatch=True,
         include_cost_explorer=True,
+        scan_all_regions=scan_all_regions,
+        selected_regions=list(selected_regions) if selected_regions else None,
     )
 
 
@@ -141,6 +152,8 @@ if data_source == "Live AWS Account":
         st.session_state.pop("connected_identity", None)
         st.session_state.pop("is_aws_connected", None)
 
+    # Pre-auth fallback region list. After connecting, all enabled regions are
+    # discovered dynamically from the account via EC2 DescribeRegions.
     region_options = [
         "ap-south-1",
         "us-east-1",
@@ -150,6 +163,16 @@ if data_source == "Live AWS Account":
         "eu-west-1",
         "eu-central-1",
         "ap-southeast-1",
+        "ap-northeast-1",
+        "ap-northeast-2",
+        "ap-southeast-2",
+        "eu-west-2",
+        "eu-west-3",
+        "eu-north-1",
+        "ca-central-1",
+        "sa-east-1",
+        "me-south-1",
+        "af-south-1",
     ]
 
     profile_input: str | None = None
@@ -265,6 +288,32 @@ if data_source == "Live AWS Account":
         help="Historical CloudWatch metric and Cost Explorer observation period.",
     )
 
+    # Multi-region scan settings
+    st.sidebar.divider()
+    st.sidebar.subheader("Region Scan Settings")
+    scan_all_regions_toggle = st.sidebar.checkbox(
+        "Scan All Enabled Regions",
+        value=False,
+        help=(
+            "When enabled, FinSight dynamically discovers and scans all AWS regions "
+            "enabled for this account using EC2 DescribeRegions. "
+            "This may take longer but provides complete coverage."
+        ),
+    )
+    # Allow manual region selection when not scanning all
+    manual_region_selection = not scan_all_regions_toggle
+    if not scan_all_regions_toggle:
+        # If we have discovered regions from a previous connection, offer them
+        discovered_regions = st.session_state.get("discovered_region_list", region_options)
+        selected_scan_regions = st.sidebar.multiselect(
+            "Regions to Scan",
+            discovered_regions,
+            default=discovered_regions[:1] if discovered_regions else region_options[:1],
+            help="Select specific regions to scan. Leave all selected to scan all enabled regions.",
+        )
+    else:
+        selected_scan_regions = None  # means all eligible
+
     is_connected = st.session_state.get("is_aws_connected", False)
     connected_identity = st.session_state.get("connected_identity", {})
 
@@ -334,6 +383,8 @@ if data_source == "Live AWS Account":
                             policy_path=policy_path,
                             include_cloudwatch=True,
                             include_cost_explorer=True,
+                            scan_all_regions=scan_all_regions_toggle,
+                            selected_regions=selected_scan_regions,
                         )
                         st.session_state["is_aws_connected"] = True
                         st.session_state["connected_identity"] = identity
@@ -394,6 +445,8 @@ if data_source == "Live AWS Account":
                             policy_path=policy_path,
                             include_cloudwatch=True,
                             include_cost_explorer=True,
+                            scan_all_regions=scan_all_regions_toggle,
+                            selected_regions=selected_scan_regions,
                         )
                         st.session_state["is_aws_connected"] = True
                         st.session_state["connected_identity"] = identity
@@ -442,6 +495,8 @@ if data_source == "Live AWS Account":
                             policy_path=policy_path,
                             include_cloudwatch=True,
                             include_cost_explorer=True,
+                            scan_all_regions=scan_all_regions_toggle,
+                            selected_regions=selected_scan_regions,
                         )
                         st.session_state["is_aws_connected"] = True
                         st.session_state["connected_identity"] = identity
@@ -457,6 +512,16 @@ if data_source == "Live AWS Account":
         if live_result is not None:
             df = live_result.data
             source_name = f"Live AWS (Account {live_result.account_id} | {live_result.region})"
+            scanned = live_result.metadata.get("regions_scanned", [live_result.region])
+            region_label = (
+                f"All Regions ({len(scanned)} scanned)"
+                if len(scanned) > 1
+                else live_result.region
+            )
+            source_name = f"Live AWS (Account {live_result.account_id} | {region_label})"
+            # Store discovered regions for the next session's multiselect
+            if live_result.metadata.get("all_discovered_regions"):
+                st.session_state["discovered_region_list"] = live_result.metadata["all_discovered_regions"]
     else:
         st.info("👈 **Connect AWS Account:** Select a connection method and enter credentials in the sidebar to begin FinOps analysis.")
         st.stop()
@@ -549,23 +614,43 @@ if is_live_mode and live_result is not None:
     # Use live pre-computed findings or run on active filtered subset
     effective_min_days = 1
     idle = detect_idle_resources(filtered, ec2_cpu_p95_threshold=5.0, min_days_observed=effective_min_days)
-    rightsizing = recommend_rightsizing(filtered, p95_threshold=20.0)
-    tag_report, compliance = evaluate_tagging_compliance(filtered, policy)
+
+    try:
+        rightsizing = recommend_rightsizing(filtered, p95_threshold=20.0)
+    except Exception as e:
+        st.warning(f"⚠️ EC2 Rightsizing analysis could not be evaluated: {e}")
+        rightsizing = pd.DataFrame()
+
+    try:
+        tag_report, compliance = evaluate_tagging_compliance(filtered, policy)
+    except Exception as e:
+        st.warning(f"⚠️ Tagging governance analysis could not be evaluated: {e}")
+        tag_report, compliance = pd.DataFrame(), 100.0
 
     total_spend = max(0.0, float(live_result.total_spend_usd))
     numeric_waste = pd.to_numeric(idle["waste_usd"], errors="coerce").dropna()
     identified_waste = float(numeric_waste.sum()) if not numeric_waste.empty else 0.0
-    rightsizing_savings = float(pd.to_numeric(rightsizing["estimated_monthly_savings_usd"], errors="coerce").dropna().sum()) if not rightsizing.empty else 0.0
+    rightsizing_savings = float(pd.to_numeric(rightsizing["estimated_monthly_savings_usd"], errors="coerce").dropna().sum()) if not rightsizing.empty and "estimated_monthly_savings_usd" in rightsizing.columns else 0.0
 
 else:
     # Synthetic or Uploaded mode
     effective_min_days = 7
     idle = detect_idle_resources(filtered, min_days_observed=effective_min_days) if not filtered.empty else pd.DataFrame()
-    rightsizing = recommend_rightsizing(filtered) if not filtered.empty else pd.DataFrame()
-    tag_report, compliance = evaluate_tagging_compliance(filtered, policy) if not filtered.empty else (pd.DataFrame(), 100.0)
+    try:
+        rightsizing = recommend_rightsizing(filtered) if not filtered.empty else pd.DataFrame()
+    except Exception as e:
+        st.warning(f"⚠️ EC2 Rightsizing analysis could not be evaluated: {e}")
+        rightsizing = pd.DataFrame()
+
+    try:
+        tag_report, compliance = evaluate_tagging_compliance(filtered, policy)
+    except Exception as e:
+        st.warning(f"⚠️ Tagging governance analysis could not be evaluated: {e}")
+        tag_report, compliance = pd.DataFrame(), 100.0 if not filtered.empty else (pd.DataFrame(), 100.0)
 
     total_spend = max(0.0, float(filtered["lineItem/UnblendedCost"].dropna().sum())) if not filtered.empty and "lineItem/UnblendedCost" in filtered.columns else 0.0
     identified_waste = max(0.0, float(idle["waste_usd"].dropna().sum())) if not idle.empty and "waste_usd" in idle.columns else 0.0
+    rightsizing_savings = max(0.0, float(rightsizing["estimated_monthly_savings_usd"].dropna().sum())) if not rightsizing.empty and "estimated_monthly_savings_usd" in rightsizing.columns else 0.0
     rightsizing_savings = max(0.0, float(rightsizing["estimated_monthly_savings_usd"].dropna().sum())) if not rightsizing.empty else 0.0
 
 # Normalize any tiny negative zeros
@@ -634,9 +719,40 @@ with st.container(border=True):
             )
 
 # Display warnings if present
+# Display warnings if present (suppress cost-unavailability from individual regions — shown in region panel)
 if is_live_mode and live_result is not None and live_result.warnings:
     for w in live_result.warnings:
         st.warning(f"⚠️ {w}")
+
+# Multi-region scan status panel
+if is_live_mode and live_result is not None:
+    regions_scanned = live_result.metadata.get("regions_scanned", [])
+    regions_failed = live_result.metadata.get("regions_failed", [])
+    all_discovered = live_result.metadata.get("all_discovered_regions", [])
+    if len(regions_scanned) > 1 or regions_failed:
+        with st.expander(
+            f"🌍 Region Scan Status — {len(regions_scanned)} scanned"
+            + (f", {len(regions_failed)} failed" if regions_failed else ""),
+            expanded=bool(regions_failed),
+        ):
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                st.markdown(f"**✅ Successfully Scanned ({len(regions_scanned)})**")
+                for r in sorted(regions_scanned):
+                    st.markdown(f"• `{r}`")
+            with sc2:
+                if regions_failed:
+                    st.markdown(f"**❌ Failed / Inaccessible ({len(regions_failed)})**")
+                    region_errors = live_result.metadata.get("region_errors", {})
+                    for r in sorted(regions_failed):
+                        errs = region_errors.get(r, ["Unknown error"])
+                        st.markdown(f"• `{r}` — {errs[0][:120]}")
+                else:
+                    st.markdown("**No regions failed.**")
+            if all_discovered:
+                skipped = [r for r in all_discovered if r not in regions_scanned and r not in regions_failed]
+                if skipped:
+                    st.caption(f"Skipped (not opted-in): {', '.join(sorted(skipped))}")
 
 # -----------------------------------------------------------------------------
 # Section 1: KPI Summary Cards
